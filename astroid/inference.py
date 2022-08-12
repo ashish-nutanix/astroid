@@ -496,6 +496,8 @@ def _invoke_binop_inference(instance, opnode, op, other, context, method_name):
     methods = dunder_lookup.lookup(instance, method_name)
     method = methods[0]
     inferred = next(method.infer(context=context))
+    if inferred is util.Uninferable:
+        raise exceptions.InferenceError
     return instance.infer_binary_op(opnode, op, other, context, inferred)
 
 
@@ -713,12 +715,7 @@ def _infer_augassign(self, context=None):
             yield util.Uninferable
             return
 
-        # TODO(cpopa): if we have A() * A(), trying to infer
-        # the rhs with the same context will result in an
-        # inference error, so we create another context for it.
-        # This is a bug which should be fixed in InferenceContext at some point.
         rhs_context = context.clone()
-        rhs_context.path = set()
         for rhs in self.value.infer(context=rhs_context):
             if rhs is util.Uninferable:
                 # Don't know how to process this.

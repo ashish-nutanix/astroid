@@ -2154,6 +2154,36 @@ class InferenceTest(resources.SysPathSetup, unittest.TestCase):
         self.assertRaises(InferenceError, next, module['other_decorators'].infer())
         self.assertRaises(InferenceError, next, module['no_yield'].infer())
 
+    def test_nested_contextmanager(self):
+        """Make sure contextmanager works with nested functions
+
+        Previously contextmanager would retrieve
+        the first yield instead of the yield in the
+        proper scope
+
+        Fixes https://github.com/PyCQA/pylint/issues/1746
+        """
+        code = """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def outer():
+            @contextmanager
+            def inner():
+                yield 2
+            yield inner
+
+        with outer() as ctx:
+            ctx #@
+            with ctx() as val:
+                val #@
+        """
+        context_node, value_node = extract_node(code)
+        value = next(value_node.infer())
+        context = next(context_node.infer())
+        assert isinstance(context, nodes.FunctionDef)
+        assert isinstance(value, nodes.Const)
+
     def test_unary_op_leaks_stop_iteration(self):
         node = extract_node('+[] #@')
         self.assertEqual(util.Uninferable, next(node.infer()))
@@ -4273,9 +4303,7 @@ class CallSiteTest(unittest.TestCase):
         self.assertIn('f', site.duplicated_keywords)
 
 
-@unittest.expectedFailure
 class ObjectDunderNewTest(unittest.TestCase):
-
     def test_object_dunder_new_is_inferred_if_decorator(self):
         node = extract_node('''
         @object.__new__
@@ -4284,6 +4312,25 @@ class ObjectDunderNewTest(unittest.TestCase):
         ''')
         inferred = next(node.infer())
         self.assertIsInstance(inferred, Instance)
+
+
+def test_augassign_recursion():
+    """Make sure inference doesn't throw a RecursionError
+
+    Regression test for augmented assign dropping context.path
+    causing recursion errors
+
+    """
+    # infinitely recurses in python
+    code = """
+    def rec():
+        a = 0
+        a += rec()
+        return a
+    rec()
+    """
+    cls_node = extract_node(code)
+    assert next(cls_node.infer()) is util.Uninferable
 
 
 if __name__ == '__main__':

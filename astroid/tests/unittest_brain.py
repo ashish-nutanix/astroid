@@ -316,9 +316,9 @@ class SixBrainTest(unittest.TestCase):
         if six.PY2:
             # In reality it's a function, but our implementations
             # transforms it into a method.
-            self.assertIsInstance(urljoin, astroid.BoundMethod)
+            self.assertIsInstance(urljoin, astroid.FunctionDef)
             self.assertEqual(urljoin.qname(), 'urlparse.urljoin')
-            self.assertIsInstance(urlencode, astroid.BoundMethod)
+            self.assertIsInstance(urlencode, astroid.FunctionDef)
             self.assertEqual(urlencode.qname(), 'urllib.urlencode')
         else:
             self.assertIsInstance(urljoin, nodes.FunctionDef)
@@ -350,9 +350,9 @@ class SixBrainTest(unittest.TestCase):
         if six.PY2:
             # In reality it's a function, but our implementations
             # transforms it into a method.
-            self.assertIsInstance(urlopen, astroid.BoundMethod)
+            self.assertIsInstance(urlopen, astroid.FunctionDef)
             self.assertEqual(urlopen.qname(), 'urllib2.urlopen')
-            self.assertIsInstance(urlretrieve, astroid.BoundMethod)
+            self.assertIsInstance(urlretrieve, astroid.FunctionDef)
             self.assertEqual(urlretrieve.qname(), 'urllib.urlretrieve')
         else:
             self.assertIsInstance(urlopen, nodes.FunctionDef)
@@ -372,6 +372,20 @@ class SixBrainTest(unittest.TestCase):
         else:
             qname = 'httplib.HTTPSConnection'
         self.assertEqual(inferred.qname(), qname)
+
+    @unittest.skipIf(six.PY2,
+                     "The python 2 six brain uses dummy classes")
+    def test_from_submodule_imports(self):
+        """Make sure ulrlib submodules can be imported from
+
+        See PyCQA/pylint#1640 for relevant issue
+        """
+        ast_node = builder.extract_node('''
+        from six.moves.urllib.parse import urlparse
+        urlparse #@
+        ''')
+        inferred = next(ast_node.infer())
+        self.assertIsInstance(inferred, nodes.FunctionDef)
 
 
 @unittest.skipUnless(HAS_MULTIPROCESSING,
@@ -645,9 +659,26 @@ class PytestBrainTest(unittest.TestCase):
             self.assertIn(attr, module)
 
 
-class IOBrainTest(unittest.TestCase):
+def streams_are_fine():
+    """Check if streams are being overwritten,
+    for example, by pytest
 
-    @unittest.skipUnless(six.PY3, 'Needs Python 3 io model')
+    stream inference will not work if they are overwritten
+
+    PY3 only
+    """
+    import io
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        if not isinstance(stream, io.IOBase):
+            return False
+    return True
+
+
+class IOBrainTest(unittest.TestCase):
+    @unittest.skipUnless(
+        six.PY3 and streams_are_fine(),
+        "Needs Python 3 io model / doesn't work with plain pytest."
+        "use pytest -s for this test to work")
     def test_sys_streams(self):
         for name in {'stdout', 'stderr', 'stdin'}:
             node = astroid.extract_node('''
@@ -823,6 +854,36 @@ class AttrsTest(unittest.TestCase):
 
         should_be_attribute = next(module.getattr('f')[0].infer()).getattr('d')[0]
         self.assertIsInstance(should_be_attribute, astroid.Unknown)
+
+    def test_special_attributes(self):
+        """Make sure special attrs attributes exist"""
+
+        code = """
+        import attr
+
+        @attr.s
+        class Foo:
+            pass
+        Foo()
+        """
+        foo_inst = next(astroid.extract_node(code).infer())
+        [attr_node] = foo_inst.getattr("__attrs_attrs__")
+        # Prevents https://github.com/PyCQA/pylint/issues/1884
+        assert isinstance(attr_node, nodes.Unknown)
+
+    def test_dont_consider_assignments_but_without_attrs(self):
+        code = '''
+        import attr
+
+        class Cls: pass
+        @attr.s
+        class Foo:
+            temp = Cls()
+            temp.prop = 5
+            bar_thing = attr.ib(default=temp)
+        Foo()
+        '''
+        next(astroid.extract_node(code).infer())
 
 
 if __name__ == '__main__':
